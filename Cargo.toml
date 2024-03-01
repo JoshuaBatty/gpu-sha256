@@ -1,0 +1,13 @@
+[package]
+name = "gpu_sha256"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+bytemuck = "1.7"
+flume = "0.11"
+rayon = "1.5"
+sha2 = "0.10"
+tokio = { version = "1", features = ["full"] }
+# vulkan-portability feature is needed for enabling vulkan on mac os. The timings feature is not available on Metal. 
+wgpu = { version = "0.19", features = ["vulkan-portability"] }
