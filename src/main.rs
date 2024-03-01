@@ -1,33 +1,25 @@
 use rayon::iter::{IntoParallelRefIterator, ParallelIterator};
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::borrow::Cow;
 use wgpu::util::DeviceExt;
-    
+
 const NUM_HASHES: usize = 2_000_000;
 
 // Constants for SHA-256
 // These are read in the compute shader
 const K: [u32; 64] = [
-    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5,
-    0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
-    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3,
-    0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
-    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc,
-    0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
-    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7,
-    0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
-    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13,
-    0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
-    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3,
-    0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
-    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5,
-    0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
-    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208,
-    0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
+    0x428a2f98, 0x71374491, 0xb5c0fbcf, 0xe9b5dba5, 0x3956c25b, 0x59f111f1, 0x923f82a4, 0xab1c5ed5,
+    0xd807aa98, 0x12835b01, 0x243185be, 0x550c7dc3, 0x72be5d74, 0x80deb1fe, 0x9bdc06a7, 0xc19bf174,
+    0xe49b69c1, 0xefbe4786, 0x0fc19dc6, 0x240ca1cc, 0x2de92c6f, 0x4a7484aa, 0x5cb0a9dc, 0x76f988da,
+    0x983e5152, 0xa831c66d, 0xb00327c8, 0xbf597fc7, 0xc6e00bf3, 0xd5a79147, 0x06ca6351, 0x14292967,
+    0x27b70a85, 0x2e1b2138, 0x4d2c6dfc, 0x53380d13, 0x650a7354, 0x766a0abb, 0x81c2c92e, 0x92722c85,
+    0xa2bfe8a1, 0xa81a664b, 0xc24b8b70, 0xc76c51a3, 0xd192e819, 0xd6990624, 0xf40e3585, 0x106aa070,
+    0x19a4c116, 0x1e376c08, 0x2748774c, 0x34b0bcb5, 0x391c0cb3, 0x4ed8aa4a, 0x5b9cca4f, 0x682e6ff3,
+    0x748f82ee, 0x78a5636f, 0x84c87814, 0x8cc70208, 0x90befffa, 0xa4506ceb, 0xbef9a3f7, 0xc67178f2,
 ];
 
 #[tokio::main]
-pub async fn main() -> Result<(), Box<dyn std::error::Error>> { 
+pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Test data
     let mut messages = vec![];
     for i in 0..NUM_HASHES {
@@ -47,18 +39,19 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mut hasher = Sha256::new();
         hasher.update(message);
         let result = hasher.finalize();
-        rust_hashes.push(format!("{:x}",result));
+        rust_hashes.push(format!("{:x}", result));
     }
     println!("Rust sequential sha256 took: {:?}", now.elapsed());
 
     // do the above but with rayon
     let now = std::time::Instant::now();
-    let _: Vec<_> = messages.par_iter()
+    let _: Vec<_> = messages
+        .par_iter()
         .map(|message| {
             let mut hasher = Sha256::new();
             hasher.update(message);
             let result = hasher.finalize();
-            format!("{:x}",result)
+            format!("{:x}", result)
         })
         .collect();
     println!("Rust parallel sha256 took: {:?}", now.elapsed());
@@ -66,22 +59,27 @@ pub async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let message_sizes = get_message_sizes(&messages[0]);
 
     // Add padding to each message and convert directly to u32
-    let messages_u32: Vec<u32> = messages.iter()
+    let messages_u32: Vec<u32> = messages
+        .iter()
         .flat_map(|message| pad_message_for_sha256(message)) // Pad each message
         .collect::<Vec<u8>>() // Collect padded messages into a single Vec<u8>
         .chunks_exact(4) // Split the Vec<u8> into 4-byte chunks
         .map(|chunk| u32::from_le_bytes(chunk.try_into().unwrap())) // Convert each chunk into u32
         .collect(); // Collect the u32 values into a Vec<u32>
-    
-    let result = execute_gpu(&messages_u32, message_sizes, messages_to_hash).await.unwrap();
+
+    let result = execute_gpu(&messages_u32, message_sizes, messages_to_hash)
+        .await
+        .unwrap();
 
     // Convert the entire result into bytes first
     let result_bytes = bytemuck::cast_slice::<u32, u8>(&result);
 
     // Then convert each byte to a hexadecimal string
     let mut hash_hex_strings: Vec<String> = Vec::new();
-    for chunk in result_bytes.chunks(32) { // Assuming 32 bytes per hash
-        let hash_hex_str = chunk.iter()
+    for chunk in result_bytes.chunks(32) {
+        // Assuming 32 bytes per hash
+        let hash_hex_str = chunk
+            .iter()
             .map(|byte| format!("{:02x}", byte))
             .collect::<String>();
         hash_hex_strings.push(hash_hex_str);
@@ -109,7 +107,8 @@ async fn execute_gpu(
         .request_device(
             &wgpu::DeviceDescriptor {
                 label: None,
-                required_features: wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES,
+                required_features: wgpu::Features::TIMESTAMP_QUERY
+                    | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES,
                 required_limits: wgpu::Limits::default(),
             },
             None,
@@ -148,9 +147,9 @@ async fn execute_gpu_inner(
     let messages_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Messages Buffer"),
         contents: bytemuck::cast_slice(messages),
-        usage: wgpu::BufferUsages::STORAGE
+        usage: wgpu::BufferUsages::STORAGE,
     });
-    
+
     // Num messages buffer
     let num_messages_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("Num Messages Buffer"),
@@ -173,10 +172,10 @@ async fn execute_gpu_inner(
 
     let k_buffer = device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
         label: Some("K Buffer"),
-        contents: bytemuck::cast_slice(&K), 
-        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST, 
+        contents: bytemuck::cast_slice(&K),
+        usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
     });
-    
+
     let timestamp_buffer = device.create_buffer(&wgpu::BufferDescriptor {
         label: Some("Timestamps buffer"),
         size: 16,
@@ -213,7 +212,7 @@ async fn execute_gpu_inner(
             wgpu::BindGroupEntry {
                 binding: 1,
                 resource: hashes_buffer.as_entire_binding(),
-            },  
+            },
             wgpu::BindGroupEntry {
                 binding: 2,
                 resource: num_messages_buffer.as_entire_binding(),
@@ -225,7 +224,7 @@ async fn execute_gpu_inner(
             wgpu::BindGroupEntry {
                 binding: 4,
                 resource: k_buffer.as_entire_binding(),
-            },    
+            },
         ],
     });
 
@@ -240,7 +239,10 @@ async fn execute_gpu_inner(
     let num_workgroups_x = (messages_to_hash + threads_per_group - 1) / threads_per_group;
 
     println!("Total messages to hash: {}", messages_to_hash);
-    println!("Dispatching {} workgroups with {} threads each", num_workgroups_x, threads_per_group);
+    println!(
+        "Dispatching {} workgroups with {} threads each",
+        num_workgroups_x, threads_per_group
+    );
 
     let mut encoder =
         device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
@@ -257,7 +259,13 @@ async fn execute_gpu_inner(
     // Will copy data from storage buffer on GPU to staging buffer on CPU.
     encoder.copy_buffer_to_buffer(&hashes_buffer, 0, &staging_buffer, 0, hashes_buffer.size());
     encoder.resolve_query_set(&queries, 0..2, &timestamp_buffer, 0);
-    encoder.copy_buffer_to_buffer(&timestamp_buffer,0,&timestamp_readback_buffer,0,timestamp_buffer.size());
+    encoder.copy_buffer_to_buffer(
+        &timestamp_buffer,
+        0,
+        &timestamp_readback_buffer,
+        0,
+        timestamp_buffer.size(),
+    );
 
     // Submits command encoder for processing
     queue.submit(Some(encoder.finish()));
@@ -289,11 +297,11 @@ async fn execute_gpu_inner(
             .chunks_exact(8)
             .map(|b| u64::from_ne_bytes(b.try_into().unwrap()))
             .collect::<Vec<_>>();
-        
+
         // Unmap buffers from memory and drop them
         drop(data);
         drop(timing_data);
-        staging_buffer.unmap(); 
+        staging_buffer.unmap();
         timestamp_readback_buffer.unmap();
 
         println!(
@@ -309,7 +317,6 @@ async fn execute_gpu_inner(
         panic!("failed to run compute on gpu!")
     }
 }
-
 
 fn pad_message_for_sha256(message: &[u8]) -> Vec<u8> {
     let mut padded_message = message.to_vec();
